@@ -1,0 +1,68 @@
+# docker-compose.yml
+#
+# Three services on one user-defined bridge network. Compose creates that
+# network automatically and runs an embedded DNS server on it, so containers
+# can reach each other by service name (e.g. "payment-service", "postgres").
+# That name resolution is the subject of Challenges 1 and 2.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      # Exposed to YOUR machine so you can poke at it with psql. Internal
+      # service-to-service traffic does NOT need this; it uses the network.
+      - "5432:5432"
+    volumes:
+      # Persist data across restarts.
+      - pgdata:/var/lib/postgresql/data
+      # Run the schema once on first init (see db/schema.sql for the caveat).
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  payment-service:
+    build: ./payment-service
+    environment:
+      PORT: "8081"
+      DATABASE_URL: "postgres://app:app@postgres:5432/app?sslmode=disable"
+      # ---- knobs for breaking things on purpose ----
+      # FAIL_RATE: probability [0.0-1.0] a payment is randomly declined (500).
+      FAIL_RATE: "0.0"
+      # DELAY_MS: artificial delay before responding, in milliseconds.
+      DELAY_MS: "0"
+    ports:
+      # Exposed so you can call payment-service DIRECTLY during experiments
+      # (e.g. compare hitting it via order-service vs. on its own).
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  order-service:
+    build: ./order-service
+    environment:
+      PORT: "8080"
+      DATABASE_URL: "postgres://app:app@postgres:5432/app?sslmode=disable"
+      # order-service finds payment-service by its compose service NAME.
+      PAYMENT_URL: "http://payment-service:8081"
+    ports:
+      # Host 8090 -> container 8080. (8080 on the host is commonly taken by
+      # other tools, e.g. phpMyAdmin; the container still listens on 8080.)
+      - "8090:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # Note we wait for payment-service to START, not to be "ready". There is
+      # no health gate here on purpose — startup ordering is its own lesson.
+      payment-service:
+        condition: service_started
+
+volumes:
+  pgdata:

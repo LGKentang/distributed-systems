@@ -1,0 +1,9 @@
+# Go build output
+/order-service/order-service
+/payment-service/payment-service
+*.exe
+
+# Editor/OS noise
+.DS_Store
+.idea/
+.vscode/
